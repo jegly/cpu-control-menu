@@ -1,0 +1,30 @@
+# CPU Control Menu (Bash)
+
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE) [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]() [![Shell](https://img.shields.io/badge/language-Bash-green.svg)]()
+
+## Description
+CPU Control Menu (Bash) — A lightweight, terminal-based CPU management tool for Linux. Written entirely in Bash with dialog menus, it lets you set governors, adjust min/max frequencies, toggle Turbo Boost, run stress tests, and view CPU info. Simple, portable, and a no-frills alternative to GUI tools like cpu-power-manager.
+
+## Features
+- Set CPU governors (performance, powersave, etc.)
+- Adjust fixed, minimum, and maximum frequencies
+- Toggle Intel/AMD Turbo Boost
+- Run stress tests with progress gauge
+- View CPU info, hardware limits, and logs
+- Menu-driven interface with dialog
+
+## Installation
+- Clone: `git clone https://github.com/globalcve/cpu-control-menu.git`
+- Enter directory: `cd cpu-control-menu`
+- Make executable: `chmod +x cpupower_2.0_bash.sh`
+- Run: `./cpupower_2.0_bash.sh`
+
+## Dependencies
+The script checks for and can install missing dependencies:
+- cpufrequtils
+- dialog
+- stress
+
+
+## License
+GNU GPL v3.0 
