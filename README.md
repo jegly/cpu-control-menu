@@ -3,7 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE) [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]() [![Shell](https://img.shields.io/badge/language-Bash-green.svg)]()
 
 ## Description
-CPU Control Menu (Bash) — A lightweight, terminal-based CPU management tool for Linux. Written entirely in Bash with dialog menus, it lets you set governors, adjust min/max frequencies, toggle Turbo Boost, run stress tests, and view CPU info. Simple, portable, and a no-frills alternative to GUI tools like cpu-power-manager.
+CPU Control Menu (Bash) — A lightweight, terminal-based CPU management tool for Linux. Written entirely in Bash with dialog menus, it lets you set governors, adjust min/max frequencies, toggle Turbo Boost, run stress tests, and view CPU info. Simple, portable, and a no-frills alternative to the GUI tool cpu-power-manager you will find in my repo, which is a overkill gtk ui / rust backend version of this plus more.
 
 ## Features
 - Set CPU governors (performance, powersave, etc.)
