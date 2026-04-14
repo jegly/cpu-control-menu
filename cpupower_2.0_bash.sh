@@ -1,8 +1,8 @@
 #!/bin/bash
-# CPU Control Menu - Improved & Fixed
+# CPU Control Menu - Improved & Fixed (No Hangs)
 # Requires: cpufrequtils, dialog, stress (optional), cpupower (optional)
 
-# ─── Strict mode (trap replaces set -e so we can handle errors gracefully) ────
+# ─── Strict mode (without set -e to avoid hangs) ────
 set -uo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -19,24 +19,33 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOGFILE"
 }
 
-# ─── Error display (non-fatal: removed erroneous 'return 1' after dialog) ─────
+# ─── Error display ────────────────────────────────────────────────────────────
 error_msg() {
     log "ERROR: $1"
-    dialog --msgbox "Error: $1" 8 55
+    dialog --msgbox "Error: $1" 8 55 2>/dev/null || echo "Error: $1"
 }
 
-# ─── Dependency checker ───────────────────────────────────────────────────────
+# ─── Dependency checker (FIXED: no hangs, timeout for read) ───────────────────
 check_dep() {
     local pkg="$1" cmd="$2"
     command -v "$cmd" &>/dev/null && return 0
 
     echo -e "${YELLOW}Missing dependency: $pkg ($cmd)${NC}"
-    read -rp "Install $pkg now? [y/N]: " ans
+    
+    # Use timeout to prevent hang, read with -t timeout
+    local ans=""
+    read -t 10 -rp "Install $pkg now? [y/N]: " ans 2>/dev/null || ans="n"
+    
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-        sudo apt-get update -qq || return 1
-        sudo apt-get install -y "$pkg" || return 1
-        log "Installed dependency: $pkg"
-        return 0
+        echo "Installing $pkg..."
+        sudo apt-get update -qq 2>/dev/null || true
+        if sudo apt-get install -y "$pkg" 2>/dev/null; then
+            log "Installed dependency: $pkg"
+            return 0
+        else
+            echo -e "${RED}Failed to install $pkg${NC}"
+            return 1
+        fi
     else
         echo -e "${RED}Skipping $pkg. Some features may not work.${NC}"
         return 1
@@ -45,37 +54,35 @@ check_dep() {
 
 # ─── CPU helpers ──────────────────────────────────────────────────────────────
 get_cpu_count() {
-    nproc
+    nproc 2>/dev/null || grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "1"
 }
 
 get_cpu_model() {
-    grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs
+    grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown"
 }
 
-# Returns e.g. "3.6GHz" or empty string on failure
 get_max_cpu_frequency() {
     local path="/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
     if [[ -r "$path" ]]; then
-        awk '{printf "%.1fGHz", $1/1000000}' "$path"
+        awk '{printf "%.1fGHz", $1/1000000}' "$path" 2>/dev/null
         return 0
     fi
-    # Fallback via cpufreq-info
     if command -v cpufreq-info &>/dev/null; then
         local val
         val=$(cpufreq-info -l 2>/dev/null | awk '{print $2}' | head -1)
         [[ -n "$val" ]] && awk -v v="$val" 'BEGIN{printf "%.1fGHz", v/1000000}' && return 0
     fi
+    echo "Unknown"
     return 1
 }
 
-# Returns e.g. "0.8GHz - 3.6GHz"
 get_frequency_range() {
     local min_path="/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq"
     local max_path="/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
     if [[ -r "$min_path" && -r "$max_path" ]]; then
-        awk '{printf "%.1fGHz", $1/1000000}' "$min_path" | tr -d '\n'
+        awk '{printf "%.1fGHz", $1/1000000}' "$min_path" 2>/dev/null | tr -d '\n'
         echo -n " - "
-        awk '{printf "%.1fGHz\n", $1/1000000}' "$max_path"
+        awk '{printf "%.1fGHz\n", $1/1000000}' "$max_path" 2>/dev/null
         return 0
     fi
     echo "Unknown"
@@ -85,7 +92,6 @@ get_frequency_range() {
 # ─── Validation ───────────────────────────────────────────────────────────────
 validate_frequency() {
     local freq="$1"
-    # Accept: 2GHz  2.4GHz  2400MHz  2400000  (bare kHz numbers cpufreq-set accepts)
     if [[ ! "$freq" =~ ^[0-9]+(\.[0-9]+)?(GHz|MHz|kHz)?$ ]]; then
         error_msg "Invalid frequency format. Use e.g. '3.6GHz' or '2400MHz'."
         return 1
@@ -99,6 +105,13 @@ set_governor() {
     local failed=0 success=0
 
     log "Setting governor → $governor"
+    
+    # Check if cpufreq is available
+    if ! ls /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | head -1 >/dev/null; then
+        error_msg "cpufreq not available. Check if cpufrequtils is installed and CPU driver loaded."
+        return 1
+    fi
+    
     while IFS= read -r -d '' cpu; do
         if echo "$governor" | sudo tee "$cpu" > /dev/null 2>&1; then
             (( success++ )) || true
@@ -109,7 +122,7 @@ set_governor() {
     done < <(find /sys/devices/system/cpu -name "scaling_governor" -print0 2>/dev/null)
 
     if [[ $failed -eq 0 && $success -gt 0 ]]; then
-        dialog --msgbox "Governor set to '$governor' for all $success core(s)." 8 55
+        dialog --msgbox "Governor set to '$governor' for all $success core(s)." 8 55 2>/dev/null
         log "Governor → $governor (ok, $success cores)"
     elif [[ $success -eq 0 ]]; then
         error_msg "Could not set governor. Is cpufrequtils installed and the driver loaded?"
@@ -118,11 +131,10 @@ set_governor() {
     fi
 }
 
-# List available governors from the kernel
 get_available_governors() {
     local path="/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors"
     if [[ -r "$path" ]]; then
-        cat "$path"
+        cat "$path" 2>/dev/null
     elif command -v cpufreq-info &>/dev/null; then
         cpufreq-info 2>/dev/null | grep "available cpufreq governors" | cut -d: -f2
     else
@@ -131,7 +143,6 @@ get_available_governors() {
 }
 
 # ─── Frequency setters ────────────────────────────────────────────────────────
-# FIX: cpufreq-set only sets ONE cpu at a time; loop over all cores
 set_fixed_frequency_all() {
     local freq="$1"
     validate_frequency "$freq" || return 1
@@ -149,7 +160,7 @@ set_fixed_frequency_all() {
     done
 
     if [[ $failed -eq 0 ]]; then
-        dialog --msgbox "Frequency set to $freq on all $success core(s)." 8 55
+        dialog --msgbox "Frequency set to $freq on all $success core(s)." 8 55 2>/dev/null
         log "Fixed frequency → $freq (ok)"
     else
         error_msg "Set $freq on $success core(s); failed on $failed core(s). Check log."
@@ -163,19 +174,18 @@ set_max_frequency() {
         return 1
     fi
 
-    dialog --yesno "Set all cores to maximum frequency: $max_freq?" 8 60 || return 0
+    dialog --yesno "Set all cores to maximum frequency: $max_freq?" 8 60 2>/dev/null || return 0
 
     set_fixed_frequency_all "$max_freq"
 }
 
-# FIX: loop over cores for min/max limits too
 set_frequency_limit() {
-    local flag="$1"    # -d (min) or -u (max)
+    local flag="$1"
     local prompt="$2"
     local default="$3"
 
     local freq
-    freq=$(dialog --stdout --inputbox "$prompt" 10 55 "$default") || return 0
+    freq=$(dialog --stdout --inputbox "$prompt" 10 55 "$default" 2>/dev/null) || return 0
     [[ -z "$freq" ]] && return 0
 
     validate_frequency "$freq" || return 1
@@ -191,7 +201,7 @@ set_frequency_limit() {
     done
 
     if [[ $failed -eq 0 ]]; then
-        dialog --msgbox "Limit set to $freq on $success core(s)." 8 50
+        dialog --msgbox "Limit set to $freq on $success core(s)." 8 50 2>/dev/null
         log "Freq limit $flag → $freq (ok)"
     else
         error_msg "Failed on $failed core(s); set on $success. Check log."
@@ -200,30 +210,35 @@ set_frequency_limit() {
 
 # ─── Display helpers ──────────────────────────────────────────────────────────
 show_frequencies() {
-    # FIX: 'grep MHz' is fragile; read scaling_cur_freq directly
     local output=""
     for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do
-        local cpu
-        cpu=$(echo "$f" | grep -oP 'cpu\d+')
-        local freq_mhz
-        freq_mhz=$(awk '{printf "%.0f MHz", $1/1000}' "$f" 2>/dev/null || echo "N/A")
-        output+="${cpu}: ${freq_mhz}\n"
+        if [[ -r "$f" ]]; then
+            local cpu
+            cpu=$(echo "$f" | grep -oP 'cpu\d+' 2>/dev/null || echo "cpu?")
+            local freq_mhz
+            freq_mhz=$(awk '{printf "%.0f MHz", $1/1000}' "$f" 2>/dev/null || echo "N/A")
+            output+="${cpu}: ${freq_mhz}\n"
+        fi
     done
     if [[ -z "$output" ]]; then
-        # Fallback to /proc/cpuinfo
-        output=$(grep "cpu MHz" /proc/cpuinfo | nl -w3 -s'. ' | sed 's/cpu MHz\s*://g')
+        output=$(grep "cpu MHz" /proc/cpuinfo 2>/dev/null | nl -w3 -s'. ' | sed 's/cpu MHz\s*://g' 2>/dev/null || echo "Could not read frequencies")
     fi
-    dialog --title "Current CPU Frequencies" --msgbox "$(printf '%b' "$output")" 30 50
+    dialog --title "Current CPU Frequencies" --msgbox "$(printf '%b' "$output")" 30 50 2>/dev/null
 }
 
 show_governors() {
     local output=""
     for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-        local cpu
-        cpu=$(echo "$g" | grep -oP 'cpu\d+')
-        output+="${cpu}: $(cat "$g")\n"
+        if [[ -r "$g" ]]; then
+            local cpu
+            cpu=$(echo "$g" | grep -oP 'cpu\d+' 2>/dev/null || echo "cpu?")
+            output+="${cpu}: $(cat "$g" 2>/dev/null)\n"
+        fi
     done
-    dialog --title "Active Governors" --msgbox "$(printf '%b' "$output")" 30 40
+    if [[ -z "$output" ]]; then
+        output="Could not read governors"
+    fi
+    dialog --title "Active Governors" --msgbox "$(printf '%b' "$output")" 30 40 2>/dev/null
 }
 
 show_cpu_info() {
@@ -233,24 +248,23 @@ show_cpu_info() {
     freq_range=$(get_frequency_range)
     max_freq=$(get_max_cpu_frequency 2>/dev/null || echo "Unknown")
 
-    # Also show current governor of cpu0
     local gov="Unknown"
     [[ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]] && \
-        gov=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)
+        gov=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)
 
     dialog --title "CPU Information" --msgbox \
 "CPU Model   : $cpu_model
 Cores       : $cores
 Freq Range  : $freq_range
 Max Boost   : $max_freq
-Governor    : $gov" 12 70
+Governor    : $gov" 12 70 2>/dev/null
 }
 
 show_available_governors() {
     local govs
     govs=$(get_available_governors)
     dialog --title "Available Governors" --msgbox \
-"Available governors:\n\n${govs// /\\n}" 15 50
+"Available governors:\n\n${govs// /\\n}" 15 50 2>/dev/null
 }
 
 show_hardware_limits() {
@@ -266,18 +280,16 @@ show_hardware_limits() {
             /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq 2>/dev/null || echo "?")
         output="Hardware limits: ${min} - ${max}"
     fi
-    dialog --title "Hardware Limits" --msgbox "$output" 20 65
+    dialog --title "Hardware Limits" --msgbox "$output" 20 65 2>/dev/null
 }
 
 # ─── Turbo Boost ──────────────────────────────────────────────────────────────
 toggle_turbo() {
     local turbo_path="" mode=""
 
-    # Intel pstate
     if [[ -f /sys/devices/system/cpu/intel_pstate/no_turbo ]]; then
         turbo_path="/sys/devices/system/cpu/intel_pstate/no_turbo"
         mode="intel"
-    # AMD (cpufreq boost)
     elif [[ -f /sys/devices/system/cpu/cpufreq/boost ]]; then
         turbo_path="/sys/devices/system/cpu/cpufreq/boost"
         mode="amd"
@@ -287,17 +299,15 @@ toggle_turbo() {
     fi
 
     local current action new_val msg
-    current=$(cat "$turbo_path")
+    current=$(cat "$turbo_path" 2>/dev/null || echo "0")
 
     if [[ "$mode" == "intel" ]]; then
-        # Intel: no_turbo=0 → turbo ON; no_turbo=1 → turbo OFF
         if [[ "$current" == "0" ]]; then
             action="disable"; new_val="1"; msg="Turbo Boost will be DISABLED"
         else
             action="enable";  new_val="0"; msg="Turbo Boost will be ENABLED"
         fi
     else
-        # AMD: boost=1 → turbo ON; boost=0 → turbo OFF
         if [[ "$current" == "1" ]]; then
             action="disable"; new_val="0"; msg="Turbo Boost will be DISABLED"
         else
@@ -305,10 +315,10 @@ toggle_turbo() {
         fi
     fi
 
-    dialog --yesno "$msg. Continue?" 8 50 || return 0
+    dialog --yesno "$msg. Continue?" 8 50 2>/dev/null || return 0
 
-    if echo "$new_val" | sudo tee "$turbo_path" > /dev/null; then
-        dialog --msgbox "Turbo Boost ${action}d successfully." 8 45
+    if echo "$new_val" | sudo tee "$turbo_path" > /dev/null 2>&1; then
+        dialog --msgbox "Turbo Boost ${action}d successfully." 8 45 2>/dev/null
         log "Turbo Boost ${action}d (path: $turbo_path)"
     else
         error_msg "Failed to $action Turbo Boost. Are you root / is sudo available?"
@@ -317,18 +327,18 @@ toggle_turbo() {
 
 # ─── Stress test ──────────────────────────────────────────────────────────────
 run_stress_test() {
+    if ! command -v stress &>/dev/null; then
+        error_msg "stress not installed. Install it with: sudo apt install stress"
+        return 1
+    fi
+    
     local duration=30
     local cores
     cores=$(get_cpu_count)
 
-    dialog --yesno "Run stress test on all $cores cores for ${duration}s?" 8 55 || return 0
+    dialog --yesno "Run stress test on all $cores cores for ${duration}s?" 8 55 2>/dev/null || return 0
 
     log "Stress test: $cores cores × ${duration}s"
-
-    # FIX: previous version had a race — stress PID was lost; use a temp fifo
-    local tmpfifo
-    tmpfifo=$(mktemp -u /tmp/cpu_stress_XXXXXX)
-    mkfifo "$tmpfifo"
 
     (
         stress --cpu "$cores" --timeout "${duration}s" &>/dev/null &
@@ -338,12 +348,9 @@ run_stress_test() {
             sleep 1
         done
         wait "$spid" 2>/dev/null || true
-    ) > "$tmpfifo" &
+    ) | dialog --gauge "Stress testing $cores core(s) for ${duration}s …" 8 55 0 2>/dev/null
 
-    dialog --gauge "Stress testing $cores core(s) for ${duration}s …" 8 55 0 < "$tmpfifo"
-    rm -f "$tmpfifo"
-
-    dialog --msgbox "Stress test complete!\n\nUse 'Show current frequencies' to check results." 8 55
+    dialog --msgbox "Stress test complete!\n\nUse 'Show current frequencies' to check results." 8 55 2>/dev/null
     log "Stress test complete"
 }
 
@@ -361,17 +368,24 @@ pick_custom_governor() {
     done
 
     local sel
-    sel=$(dialog --stdout --menu "Select governor:" 15 50 8 "${menu_args[@]}") || return 0
+    sel=$(dialog --stdout --menu "Select governor:" 15 50 8 "${menu_args[@]}" 2>/dev/null) || return 0
     local chosen="${avail[$((sel-1))]}"
     set_governor "$chosen"
 }
 
 # ─── Bootstrap ────────────────────────────────────────────────────────────────
 echo "Checking dependencies…"
-check_dep "cpufrequtils" "cpufreq-set" || true
-check_dep "dialog"       "dialog"      || { echo "dialog is required. Exiting."; exit 1; }
-check_dep "stress"       "stress"      || true
 
+# Check dependencies without hanging
+check_dep "cpufrequtils" "cpufreq-set" || echo "cpufrequtils not installed - frequency features limited"
+check_dep "dialog" "dialog" || { 
+    echo "dialog is required. Installing..." 
+    sudo apt-get update -qq 2>/dev/null
+    sudo apt-get install -y dialog 2>/dev/null || { echo "Failed to install dialog. Exiting."; exit 1; }
+}
+check_dep "stress" "stress" || echo "stress not installed - stress test feature limited"
+
+# Ensure log file exists
 touch "$LOGFILE" 2>/dev/null || { echo "Cannot create log file at $LOGFILE"; exit 1; }
 log "=== CPU Control Menu Started ==="
 
@@ -400,7 +414,7 @@ while true; do
         12 "Toggle Turbo Boost (Intel / AMD)" \
         13 "Run stress test (${CORES} cores, 30 s)" \
         14 "View log file" \
-        15 "Exit") || break   # ESC / Cancel = exit
+        15 "Exit" 2>/dev/null) || break
 
     case "$CHOICE" in
         0)  show_cpu_info ;;
@@ -408,7 +422,7 @@ while true; do
         2)
             FREQ=$(dialog --stdout --inputbox \
                 "Enter frequency (e.g. 3.6GHz or 2400MHz):" \
-                8 50 "${MAX_FREQ:-3.6GHz}") || continue
+                8 50 "${MAX_FREQ:-3.6GHz}" 2>/dev/null) || continue
             [[ -n "$FREQ" ]] && set_fixed_frequency_all "$FREQ"
             ;;
         3)  set_governor "performance" ;;
@@ -424,9 +438,9 @@ while true; do
         13) run_stress_test ;;
         14)
             if [[ -s "$LOGFILE" ]]; then
-                dialog --title "Log: $LOGFILE" --textbox "$LOGFILE" 30 82
+                dialog --title "Log: $LOGFILE" --textbox "$LOGFILE" 30 82 2>/dev/null
             else
-                dialog --msgbox "Log file is empty or not found." 8 45
+                dialog --msgbox "Log file is empty or not found." 8 45 2>/dev/null
             fi
             ;;
         15) break ;;
