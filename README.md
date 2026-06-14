@@ -1,33 +1,27 @@
-# CPU Control Menu (Bash)
 
-[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE) [![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]() [![Shell](https://img.shields.io/badge/language-Bash-green.svg)]()
 
 ## Description
-CPU Control Menu (Bash) — A lightweight, terminal-based CPU management tool for Linux. Written entirely in Bash with dialog menus, it lets you set governors, adjust min/max frequencies, toggle Turbo Boost, run stress tests, and view CPU info. Simple, portable, and a no-frills alternative to the GUI tool cpu-power-manager you will find in my repo, which is a overkill gtk ui / rust backend version of this plus more.
+CPU Control Menu (Bash) — A lightweight, terminal-based CPU management tool for Linux. Written entirely in Bash, it is **driver-aware**: frequency control works correctly on modern `intel_pstate` / `amd-pstate` (which have no `userspace` governor) by writing sysfs directly, not relying on `cpufreq-set -f`. Simple, portable, and a no-frills alternative to the GUI tool cpu-power-manager you will find in my repo, which is a overkill gtk ui / rust backend version of this plus more.
 
 ## Features
-- Set CPU governors (performance, powersave, etc.)
-- Adjust fixed, minimum, and maximum frequencies
+- One-shot power **profiles**: Max / Balanced / Quiet / Battery
+- **Live monitor**: per-core MHz, package temp, power draw, governor
+- Set governors and **Energy Performance Preference (EPP)**
+- Pin a fixed frequency; set min/max limits; release all limits
 - Toggle Intel/AMD Turbo Boost
-- Run stress tests with progress gauge
-- View CPU info, hardware limits, and logs
-- Menu-driven interface with dialog
-
-## Installation
-- Clone: `git clone https://github.com/globalcve/cpu-control-menu.git`
-- Enter directory: `cd cpu-control-menu`
-- Make executable: `chmod +x cpupower_2.0_bash.sh`
-- Run: `./cpupower_2.0_bash.sh`
+- **RAPL power cap (PL1)** + live package power (watts)
+- Save/restore a baseline snapshot to return to stock
+- Run stress tests; view CPU info and logs
+- Menu UI via `dialog` or `whiptail`, with a plain-text fallback
 
 ## Dependencies
-The script checks for and can install missing dependencies:
-- cpufrequtils
-- dialog
-- stress
+Talks to sysfs directly — no hard dependency on cpufrequtils. Optional:
+- `dialog` or `whiptail` (menu UI; falls back to plain text)
+- `stress` or `stress-ng` (stress test)
+- `sudo` (required only when applying changes)
 
 
-## License
-GNU GPL v3.0 
+
 
 <3 by 
 ```
@@ -39,4 +33,4 @@ ______/\\\\\\\\\\\__/\\\\\\\\\\\\\\\_____/\\\\\\\\\\\\__/\\\______________/\\\__
      _________\/\\\_____\/\\\_____________\/\\\_______\/\\\_\/\\\___________________\/\\\_______   
       __/\\\___\/\\\_____\/\\\_____________\/\\\_______\/\\\_\/\\\___________________\/\\\_______  
        _\//\\\\\\\\\______\/\\\\\\\\\\\\\\\_\//\\\\\\\\\\\\/__\/\\\\\\\\\\\\\\\_______\/\\\_______  
-        __\/////////_______\///////////////___\////////////____\///////////////________\///________```
+        __\/////////_______\///////////////___\////////////____\///////////////________\///________
